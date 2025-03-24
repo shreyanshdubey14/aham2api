@@ -5,40 +5,40 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
-// API configurations with direct keys
+// API configurations
 const apiConfig = {
   'genspark': {
     endpoint: 'https://gs.aytsao.cn/v1/chat/completions',
-    apiKey: 'sk-genspark2api', // Directly integrated Genspark key
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer sk-genspark2api'
+    },
     models: new Set([
       'gpt-4o', 'o1', 'o3-mini-high', 'claude-3-7-sonnet',
       'claude-3-7-sonnet-thinking', 'claude-3-5-haiku',
       'gemini-2.0-flash', 'deep-seek-v3', 'deep-seek-r1'
     ])
   },
-  'openrouter': {
-    endpoint: 'https://openrouter.ai/api/v1/chat/completions',
-    apiKey: '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',
+  'groq': {
+    endpoint: 'https://api.groq.com/openai/v1/chat/completions',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer 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'
+    },
     models: new Set([
-      'google/gemma-3-12b-it:free',
-      'google/gemma-3-1b-it:free',
-      'mistralai/mistral-small-3.1-24b-instruct:free',
-      'openai/gpt-4o'
+      'deepseek-r1-distill-llama-70b',
+      'llama3-70b-8192',
+      'mixtral-8x7b-32768'
     ])
   }
 };
 
-// ... [rest of the code remains identical to previous version] ...
-
-// Model router
 const getApiTarget = (model) => {
   if (apiConfig.genspark.models.has(model)) return 'genspark';
-  if (apiConfig.openrouter.models.has(model)) return 'openrouter';
-  if (model.includes('/')) return 'openrouter';
+  if (apiConfig.groq.models.has(model)) return 'groq';
   return null;
 };
 
-// Proxy endpoint
 app.post('/v1/chat/completions', async (req, res) => {
   try {
     const { model } = req.body;
@@ -48,18 +48,10 @@ app.post('/v1/chat/completions', async (req, res) => {
       return res.status(400).json({ error: 'Invalid model specified' });
     }
 
-    const { endpoint, apiKey } = apiConfig[target];
     const response = await axios({
       method: 'post',
-      url: endpoint,
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-        ...(target === 'openrouter' && {
-          'HTTP-Referer': 'https://aham2api-3.onrender.com',
-          'X-Title': 'Aham2 API Proxy'
-        })
-      },
+      url: apiConfig[target].endpoint,
+      headers: apiConfig[target].headers,
       data: req.body
     });
 
@@ -69,7 +61,7 @@ app.post('/v1/chat/completions', async (req, res) => {
       object: "chat.completion",
       created: Math.floor(Date.now() / 1000),
       model: response.data.model,
-      choices: response.data.choices?.map(choice => ({
+      choices: response.data.choices.map(choice => ({
         index: 0,
         message: {
           role: "assistant",
