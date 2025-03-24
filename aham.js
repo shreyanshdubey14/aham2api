@@ -18,7 +18,7 @@ const apiConfig = {
   },
   'openrouter': {
     endpoint: 'https://openrouter.ai/api/v1/chat/completions',
-    apiKey: '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',
+    apiKey: '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',
     models: new Set([
       'google/gemma-3-12b-it:free',
       'google/gemma-3-1b-it:free',
