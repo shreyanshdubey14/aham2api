@@ -81,7 +81,7 @@ const exposedModels = {
     'qwen-qwq-32b',
     'llama3-70b-8192',
     'llama3-8b-8192',
-    'mixtral-8x7b-32768'
+    
   ],
   'typegpt': [
     'gpt-4o-mini-2024-07-18',
