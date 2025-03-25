@@ -1,20 +1,10 @@
 const express = require('express');
 const axios = require('axios');
-const rateLimit = require('express-rate-limit');
-const helmet = require('helmet');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Security middleware
-app.use(helmet());
-app.use(express.json({ limit: '10kb' }));
-
-// Rate limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100 // limit each IP to 100 requests per windowMs
-});
-app.use(limiter);
+// No security middleware
+app.use(express.json());
 
 // API configurations
 const apiConfig = {
@@ -23,7 +13,7 @@ const apiConfig = {
     headers: {
       'Content-Type': 'application/json'
     },
-    models: [
+    models: new Set([
       'deepseek-r1', 'gpt-4o', 'gpt-4o-latest', 'chatgpt-4o-latest',
       'gemini-1.5-pro', 'gemini-1.5-pro-latest', 'gemini-flash-2.0',
       'gemini-1.5-flash', 'claude-3-5-sonnet', 'claude-3-5-sonnet-20240620',
@@ -33,125 +23,77 @@ const apiConfig = {
       'qwen-turbo-latest', 'dbrx-instruct', 'claude', 'qwen-2.5-32b',
       'qwen-2.5-coder-32b', 'qwen-qwq-32b', 'gemma2-9b-it',
       'deepseek-r1-distill-llama-70b', 'o3-mini', 'Claude-sonnet-3.7'
-    ],
+    ]),
     timeout: 30000,
-    prefix: 'samu/',
-    supportsStreaming: true
+    prefix: 'samu/'
   },
   'typegpt': {
     endpoint: 'https://api.typegpt.net/v1/chat/completions',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${process.env.TYPEGPT_API_KEY || 'sk-5Sichm5uRiWUz5KNav8x8AUEpf11UqqzDsph5palyybb0B3i'}`
+      'Authorization': 'Bearer sk-5Sichm5uRiWUz5KNav8x8AUEpf11UqqzDsph5palyybb0B3i'
     },
-    models: [
+    models: new Set([
       'gpt-4o-mini-2024-07-18',
       'deepseek-r1',
       'deepseek-v3'
-    ],
+    ]),
     timeout: 30000,
-    prefix: 'type/',
-    supportsStreaming: true
+    prefix: 'type/'
   }
 };
-
-// Convert to Sets for faster lookups
-apiConfig.samura.modelSet = new Set(apiConfig.samura.models);
-apiConfig.typegpt.modelSet = new Set(apiConfig.typegpt.models);
 
 const getApiTarget = (model) => {
   if (!model) return null;
   
-  // Force deepseek-r1 to always use TypeGPT
-  if (model === 'deepseek-r1' || model === 'type/deepseek-r1') {
-    return { target: 'typegpt', model: 'deepseek-r1' };
-  }
-
-  // Check prefixed models
+  // Check for prefixed models first
   if (model.startsWith('samu/')) {
     const actualModel = model.replace('samu/', '');
-    if (apiConfig.samura.modelSet.has(actualModel)) {
+    if (apiConfig.samura.models.has(actualModel)) {
       return { target: 'samura', model: actualModel };
     }
   }
   
   if (model.startsWith('type/')) {
     const actualModel = model.replace('type/', '');
-    if (apiConfig.typegpt.modelSet.has(actualModel)) {
+    if (apiConfig.typegpt.models.has(actualModel)) {
       return { target: 'typegpt', model: actualModel };
     }
   }
   
   // Fallback to direct model matching
-  if (model !== 'deepseek-r1' && apiConfig.samura.modelSet.has(model)) {
-    return { target: 'samura', model };
-  }
-  if (apiConfig.typegpt.modelSet.has(model)) {
-    return { target: 'typegpt', model };
-  }
+  if (apiConfig.samura.models.has(model)) return { target: 'samura', model };
+  if (apiConfig.typegpt.models.has(model)) return { target: 'typegpt', model };
   
   return null;
 };
 
-// OpenAI-style models list endpoint
-app.get('/v1/models', (req, res) => {
-  const models = [];
-  
-  // Add SamuraAI models
-  apiConfig.samura.models.forEach(model => {
-    models.push({
-      id: model,
-      object: 'model',
-      created: Math.floor(Date.now() / 1000),
-      owned_by: 'samura',
-      capabilities: {
-        streaming: apiConfig.samura.supportsStreaming
-      }
-    });
-  });
-  
-  // Add TypeGPT models
-  apiConfig.typegpt.models.forEach(model => {
-    models.push({
-      id: model,
-      object: 'model',
-      created: Math.floor(Date.now() / 1000),
-      owned_by: 'typegpt',
-      capabilities: {
-        streaming: apiConfig.typegpt.supportsStreaming
-      }
-    });
-  });
-  
-  res.json({
-    object: 'list',
-    data: models
-  });
-});
-
-// Health check
+// Health check endpoint
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'healthy' });
 });
 
-// Chat completions endpoint with streaming support
 app.post('/v1/chat/completions', async (req, res) => {
   try {
+    // Validate request
     if (!req.body || typeof req.body !== 'object') {
       return res.status(400).json({ error: 'Invalid request body' });
     }
 
-    const { model, stream } = req.body;
+    const { model } = req.body;
     const targetInfo = getApiTarget(model);
 
     if (!targetInfo) {
       return res.status(400).json({ 
         error: 'Invalid model specified',
         available_models: {
-          samura: apiConfig.samura.models.map(m => `samu/${m}`),
-          typegpt: apiConfig.typegpt.models.map(m => `type/${m}`),
-          samura_models: apiConfig.samura.models,
-          typegpt_models: apiConfig.typegpt.models
+          samura: [...apiConfig.samura.models].map(m => `samu/${m}`),
+          typegpt: [...apiConfig.typegpt.models].map(m => `type/${m}`),
+          // Also show models that can be used without prefix
+          ...Object.entries(apiConfig).reduce((acc, [key, config]) => {
+            acc[key] = [...config.models];
+            return acc;
+          }, {})
         }
       });
     }
@@ -159,32 +101,21 @@ app.post('/v1/chat/completions', async (req, res) => {
     const { target, model: actualModel } = targetInfo;
     const config = apiConfig[target];
     
-    // Handle streaming
-    if (stream === true) {
-      const response = await axios({
-        method: 'post',
-        url: config.endpoint,
-        headers: config.headers,
-        data: { ...req.body, model: actualModel },
-        responseType: 'stream',
-        timeout: config.timeout
-      });
+    // Create the request data with the actual model name
+    const requestData = {
+      ...req.body,
+      model: actualModel
+    };
 
-      // Pipe the stream directly to client
-      response.data.pipe(res);
-      return;
-    }
-
-    // Non-streaming response
     const response = await axios({
       method: 'post',
       url: config.endpoint,
       headers: config.headers,
-      data: { ...req.body, model: actualModel },
+      data: requestData,
       timeout: config.timeout
     });
 
-    // Standardize response
+    // Standardize response format
     const standardizedResponse = {
       id: response.data.id || `chatcmpl-${Date.now()}`,
       object: "chat.completion",
@@ -206,17 +137,21 @@ app.post('/v1/chat/completions', async (req, res) => {
         prompt_tokens: 0,
         completion_tokens: 0,
         total_tokens: 0
-      }
+      },
+      suggestions: null,
+      system_fingerprint: null
     };
 
     res.json(standardizedResponse);
+
   } catch (error) {
     console.error('Proxy error:', error);
     const statusCode = error.response?.status || 500;
-    res.status(statusCode).json({
+    const errorData = {
       error: error.message,
-      details: error.response?.data
-    });
+      ...(error.response?.data && { details: error.response.data })
+    };
+    res.status(statusCode).json(errorData);
   }
 });
 
