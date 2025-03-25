@@ -3,7 +3,6 @@ const axios = require('axios');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// No security middleware
 app.use(express.json());
 
 // API configurations
@@ -14,7 +13,7 @@ const apiConfig = {
     headers: {
       'Content-Type': 'application/json'
     },
-    models: new Set(), // Will be populated dynamically
+    models: new Set(),
     timeout: 30000,
     prefix: 'samu/'
   },
@@ -34,7 +33,7 @@ const apiConfig = {
   }
 };
 
-// Function to fetch and update models from samura API
+// Fetch and update samura models
 async function updateSamuraModels() {
   try {
     const response = await axios.get(apiConfig.samura.modelsEndpoint, {
@@ -43,25 +42,22 @@ async function updateSamuraModels() {
     
     if (response.data && Array.isArray(response.data.data)) {
       apiConfig.samura.models = new Set(response.data.data.map(model => model.id));
-      console.log('Successfully updated samura models:', [...apiConfig.samura.models]);
-    } else {
-      console.error('Unexpected response format from samura models endpoint');
+      console.log('Updated samura models:', [...apiConfig.samura.models]);
     }
   } catch (error) {
     console.error('Failed to fetch samura models:', error.message);
-    // You might want to implement retry logic here
   }
 }
 
-// Initial models fetch
+// Initial fetch
 updateSamuraModels();
-// Update models periodically (every 5 minutes)
+// Refresh every 5 minutes
 setInterval(updateSamuraModels, 5 * 60 * 1000);
 
+// Helper function to get API target
 const getApiTarget = (model) => {
   if (!model) return null;
   
-  // Check for prefixed models first
   if (model.startsWith('samu/')) {
     const actualModel = model.replace('samu/', '');
     if (apiConfig.samura.models.has(actualModel)) {
@@ -76,7 +72,6 @@ const getApiTarget = (model) => {
     }
   }
   
-  // Fallback to direct model matching
   if (apiConfig.samura.models.has(model)) return { target: 'samura', model };
   if (apiConfig.typegpt.models.has(model)) return { target: 'typegpt', model };
   
@@ -91,9 +86,41 @@ app.get('/health', (req, res) => {
   });
 });
 
+// NEW: Models listing endpoint
+app.get('/v1/models', (req, res) => {
+  const allModels = [
+    ...[...apiConfig.samura.models].map(id => ({
+      id: `samu/${id}`,
+      object: 'model',
+      provider: 'samura'
+    })),
+    ...[...apiConfig.typegpt.models].map(id => ({
+      id: `type/${id}`,
+      object: 'model',
+      provider: 'typegpt'
+    })),
+    // Also include non-prefixed versions
+    ...[...apiConfig.samura.models].map(id => ({
+      id,
+      object: 'model',
+      provider: 'samura'
+    })),
+    ...[...apiConfig.typegpt.models].map(id => ({
+      id,
+      object: 'model',
+      provider: 'typegpt'
+    }))
+  ];
+
+  res.json({
+    object: 'list',
+    data: allModels
+  });
+});
+
+// Chat completions endpoint
 app.post('/v1/chat/completions', async (req, res) => {
   try {
-    // Validate request
     if (!req.body || typeof req.body !== 'object') {
       return res.status(400).json({ error: 'Invalid request body' });
     }
@@ -107,7 +134,6 @@ app.post('/v1/chat/completions', async (req, res) => {
         available_models: {
           samura: [...apiConfig.samura.models].map(m => `samu/${m}`),
           typegpt: [...apiConfig.typegpt.models].map(m => `type/${m}`),
-          // Also show models that can be used without prefix
           ...Object.entries(apiConfig).reduce((acc, [key, config]) => {
             acc[key] = [...config.models];
             return acc;
@@ -119,7 +145,6 @@ app.post('/v1/chat/completions', async (req, res) => {
     const { target, model: actualModel } = targetInfo;
     const config = apiConfig[target];
     
-    // Create the request data with the actual model name
     const requestData = {
       ...req.body,
       model: actualModel
@@ -133,7 +158,6 @@ app.post('/v1/chat/completions', async (req, res) => {
       timeout: config.timeout
     });
 
-    // Standardize response format
     const standardizedResponse = {
       id: response.data.id || `chatcmpl-${Date.now()}`,
       object: "chat.completion",
