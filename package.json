@@ -2,9 +2,9 @@
   "name": "api-proxy-server",
   "version": "1.0.0",
   "description": "Proxy server for AI APIs",
-  "main": "index.js",
+  "main": "aham.js",
   "scripts": {
-    "start": "node index.js",
+    "start": "node aham.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
