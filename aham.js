@@ -1,78 +1,148 @@
 const express = require('express');
 const axios = require('axios');
+const rateLimit = require('express-rate-limit');
+const helmet = require('helmet');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(express.json());
+// Security middleware
+app.use(helmet());
+app.use(express.json({ limit: '10kb' }));
+
+// Rate limiting
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100 // limit each IP to 100 requests per windowMs
+});
+app.use(limiter);
 
 // API configurations
 const apiConfig = {
-  'genspark': {
-    endpoint: 'https://gs.aytsao.cn/v1/chat/completions',
+  'samura': {
+    endpoint: 'https://api-provider-b5s7.onrender.com/v1/chat/completions',
     headers: {
-      'Content-Type': 'application/json',
-      'Authorization': 'Bearer sk-genspark2api'
+      'Content-Type': 'application/json'
     },
     models: new Set([
-      'gpt-4o', 'o1', 'o3-mini-high', 'claude-3-7-sonnet',
-      'claude-3-7-sonnet-thinking', 'claude-3-5-haiku',
-      'gemini-2.0-flash', 'deep-seek-v3', 'deep-seek-r1'
-    ])
+      'deepseek-r1', 'gpt-4o', 'gpt-4o-latest', 'chatgpt-4o-latest',
+      'gemini-1.5-pro', 'gemini-1.5-pro-latest', 'gemini-flash-2.0',
+      'gemini-1.5-flash', 'claude-3-5-sonnet', 'claude-3-5-sonnet-20240620',
+      'anthropic/claude-3.5-sonnet', 'mistral-large', 'deepseek-v3',
+      'llama-3.1-405b', 'Meta-Llama-3.1-405B-Instruct-Turbo',
+      'Meta-Llama-3.3-70B-Instruct-Turbo', 'grok-2', 'qwen-plus-latest',
+      'qwen-turbo-latest', 'dbrx-instruct', 'claude', 'qwen-2.5-32b',
+      'qwen-2.5-coder-32b', 'qwen-qwq-32b', 'gemma2-9b-it',
+      'deepseek-r1-distill-llama-70b', 'o3-mini', 'Claude-sonnet-3.7'
+    ]),
+    timeout: 30000,
+    prefix: 'samu/'
   },
-  'groq': {
-    endpoint: 'https://api.groq.com/openai/v1/chat/completions',
+  'typegpt': {
+    endpoint: 'https://api.typegpt.net/v1/chat/completions',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': 'Bearer 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'
+      'Authorization': 'Bearer sk-5Sichm5uRiWUz5KNav8x8AUEpf11UqqzDsph5palyybb0B3i'
     },
     models: new Set([
-      'deepseek-r1-distill-llama-70b',
-      'llama3-70b-8192',
-      'mixtral-8x7b-32768'
-    ])
+      'gpt-4o-mini-2024-07-18',
+      'deepseek-r1',
+      'deepseek-v3'
+    ]),
+    timeout: 30000,
+    prefix: 'type/'
   }
 };
 
 const getApiTarget = (model) => {
-  if (apiConfig.genspark.models.has(model)) return 'genspark';
-  if (apiConfig.groq.models.has(model)) return 'groq';
+  if (!model) return null;
+  
+  // Check for prefixed models first
+  if (model.startsWith('samu/')) {
+    const actualModel = model.replace('samu/', '');
+    if (apiConfig.samura.models.has(actualModel)) {
+      return { target: 'samura', model: actualModel };
+    }
+  }
+  
+  if (model.startsWith('type/')) {
+    const actualModel = model.replace('type/', '');
+    if (apiConfig.typegpt.models.has(actualModel)) {
+      return { target: 'typegpt', model: actualModel };
+    }
+  }
+  
+  // Fallback to direct model matching
+  if (apiConfig.samura.models.has(model)) return { target: 'samura', model };
+  if (apiConfig.typegpt.models.has(model)) return { target: 'typegpt', model };
+  
   return null;
 };
 
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'healthy' });
+});
+
 app.post('/v1/chat/completions', async (req, res) => {
   try {
-    const { model } = req.body;
-    const target = getApiTarget(model);
-
-    if (!target) {
-      return res.status(400).json({ error: 'Invalid model specified' });
+    // Validate request
+    if (!req.body || typeof req.body !== 'object') {
+      return res.status(400).json({ error: 'Invalid request body' });
     }
+
+    const { model } = req.body;
+    const targetInfo = getApiTarget(model);
+
+    if (!targetInfo) {
+      return res.status(400).json({ 
+        error: 'Invalid model specified',
+        available_models: {
+          samura: [...apiConfig.samura.models].map(m => `samu/${m}`),
+          typegpt: [...apiConfig.typegpt.models].map(m => `type/${m}`),
+          // Also show models that can be used without prefix
+          ...Object.entries(apiConfig).reduce((acc, [key, config]) => {
+            acc[key] = [...config.models];
+            return acc;
+          }, {})
+        }
+      });
+    }
+
+    const { target, model: actualModel } = targetInfo;
+    const config = apiConfig[target];
+    
+    // Create the request data with the actual model name
+    const requestData = {
+      ...req.body,
+      model: actualModel
+    };
 
     const response = await axios({
       method: 'post',
-      url: apiConfig[target].endpoint,
-      headers: apiConfig[target].headers,
-      data: req.body
+      url: config.endpoint,
+      headers: config.headers,
+      data: requestData,
+      timeout: config.timeout
     });
 
     // Standardize response format
     const standardizedResponse = {
-      id: response.data.id,
+      id: response.data.id || `chatcmpl-${Date.now()}`,
       object: "chat.completion",
       created: Math.floor(Date.now() / 1000),
-      model: response.data.model,
-      choices: response.data.choices.map(choice => ({
+      model: response.data.model || actualModel,
+      choices: response.data.choices?.map(choice => ({
         index: 0,
         message: {
           role: "assistant",
           content: choice.message?.content || ""
         },
-        finish_reason: choice.finish_reason,
+        finish_reason: choice.finish_reason || "stop",
         delta: {
           content: "",
           role: ""
         }
-      })),
+      })) || [],
       usage: response.data.usage || {
         prompt_tokens: 0,
         completion_tokens: 0,
@@ -87,10 +157,11 @@ app.post('/v1/chat/completions', async (req, res) => {
   } catch (error) {
     console.error('Proxy error:', error);
     const statusCode = error.response?.status || 500;
-    res.status(statusCode).json({
+    const errorData = {
       error: error.message,
-      details: error.response?.data
-    });
+      ...(error.response?.data && { details: error.response.data })
+    };
+    res.status(statusCode).json(errorData);
   }
 });
 
