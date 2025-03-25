@@ -13,7 +13,7 @@ const apiConfig = {
     headers: {
       'Content-Type': 'application/json'
     },
-    models: new Set(), // This will be populated by fetching
+    models: new Set(),
     timeout: 30000,
     prefix: 'samu/'
   },
@@ -38,7 +38,7 @@ const apiConfig = {
       'Content-Type': 'application/json',
       'Authorization': 'Bearer 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'
     },
-    models: new Set(), // This will be populated by fetching
+    models: new Set(),
     timeout: 30000,
     prefix: 'groq/'
   }
@@ -168,25 +168,10 @@ app.get('/health', (req, res) => {
   });
 });
 
-// Models listing endpoint - shows only our curated models
+// Models listing endpoint - shows only non-prefixed models
 app.get('/v1/models', (req, res) => {
   const allModels = [
-    ...[...exposedModels.samura].map(id => ({
-      id: `samu/${id}`,
-      object: 'model',
-      provider: 'samura'
-    })),
-    ...[...exposedModels.typegpt].map(id => ({
-      id: `type/${id}`,
-      object: 'model',
-      provider: 'typegpt'
-    })),
-    ...[...exposedModels.groq].map(id => ({
-      id: `groq/${id}`,
-      object: 'model',
-      provider: 'groq'
-    })),
-    // Also include non-prefixed versions
+    // Only include non-prefixed versions
     ...[...exposedModels.samura].map(id => ({
       id,
       object: 'model',
@@ -224,14 +209,9 @@ app.post('/v1/chat/completions', async (req, res) => {
       return res.status(400).json({ 
         error: 'Invalid model specified',
         available_models: {
-          samura: [...exposedModels.samura].map(m => `samu/${m}`),
-          typegpt: [...exposedModels.typegpt].map(m => `type/${m}`),
-          groq: [...exposedModels.groq].map(m => `groq/${m}`),
-          // Also show non-prefixed versions
-          ...Object.entries(exposedModels).reduce((acc, [key, models]) => {
-            acc[key] = [...models];
-            return acc;
-          }, {})
+          samura: [...exposedModels.samura],
+          typegpt: [...exposedModels.typegpt],
+          groq: [...exposedModels.groq]
         }
       });
     }
