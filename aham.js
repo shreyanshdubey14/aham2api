@@ -30,6 +30,17 @@ const apiConfig = {
     ]),
     timeout: 30000,
     prefix: 'type/'
+  },
+  'groq': {
+    endpoint: 'https://api.groq.com/openai/v1/chat/completions',
+    modelsEndpoint: 'https://api.groq.com/openai/v1/models',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer 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'
+    },
+    models: new Set(),
+    timeout: 30000,
+    prefix: 'groq/'
   }
 };
 
@@ -49,10 +60,29 @@ async function updateSamuraModels() {
   }
 }
 
+// Fetch and update groq models
+async function updateGroqModels() {
+  try {
+    const response = await axios.get(apiConfig.groq.modelsEndpoint, {
+      headers: apiConfig.groq.headers,
+      timeout: apiConfig.groq.timeout
+    });
+    
+    if (response.data && Array.isArray(response.data.data)) {
+      apiConfig.groq.models = new Set(response.data.data.map(model => model.id));
+      console.log('Updated groq models:', [...apiConfig.groq.models]);
+    }
+  } catch (error) {
+    console.error('Failed to fetch groq models:', error.message);
+  }
+}
+
 // Initial fetch
 updateSamuraModels();
+updateGroqModels();
 // Refresh every 5 minutes
 setInterval(updateSamuraModels, 5 * 60 * 1000);
+setInterval(updateGroqModels, 5 * 60 * 1000);
 
 // Helper function to get API target
 const getApiTarget = (model) => {
@@ -72,8 +102,16 @@ const getApiTarget = (model) => {
     }
   }
   
+  if (model.startsWith('groq/')) {
+    const actualModel = model.replace('groq/', '');
+    if (apiConfig.groq.models.has(actualModel)) {
+      return { target: 'groq', model: actualModel };
+    }
+  }
+  
   if (apiConfig.samura.models.has(model)) return { target: 'samura', model };
   if (apiConfig.typegpt.models.has(model)) return { target: 'typegpt', model };
+  if (apiConfig.groq.models.has(model)) return { target: 'groq', model };
   
   return null;
 };
@@ -82,11 +120,12 @@ const getApiTarget = (model) => {
 app.get('/health', (req, res) => {
   res.status(200).json({ 
     status: 'healthy',
-    models_loaded: apiConfig.samura.models.size > 0
+    samura_models_loaded: apiConfig.samura.models.size > 0,
+    groq_models_loaded: apiConfig.groq.models.size > 0
   });
 });
 
-// NEW: Models listing endpoint
+// Models listing endpoint
 app.get('/v1/models', (req, res) => {
   const allModels = [
     ...[...apiConfig.samura.models].map(id => ({
@@ -99,6 +138,11 @@ app.get('/v1/models', (req, res) => {
       object: 'model',
       provider: 'typegpt'
     })),
+    ...[...apiConfig.groq.models].map(id => ({
+      id: `groq/${id}`,
+      object: 'model',
+      provider: 'groq'
+    })),
     // Also include non-prefixed versions
     ...[...apiConfig.samura.models].map(id => ({
       id,
@@ -109,6 +153,11 @@ app.get('/v1/models', (req, res) => {
       id,
       object: 'model',
       provider: 'typegpt'
+    })),
+    ...[...apiConfig.groq.models].map(id => ({
+      id,
+      object: 'model',
+      provider: 'groq'
     }))
   ];
 
@@ -134,6 +183,7 @@ app.post('/v1/chat/completions', async (req, res) => {
         available_models: {
           samura: [...apiConfig.samura.models].map(m => `samu/${m}`),
           typegpt: [...apiConfig.typegpt.models].map(m => `type/${m}`),
+          groq: [...apiConfig.groq.models].map(m => `groq/${m}`),
           ...Object.entries(apiConfig).reduce((acc, [key, config]) => {
             acc[key] = [...config.models];
             return acc;
