@@ -10,20 +10,11 @@ app.use(express.json());
 const apiConfig = {
   'samura': {
     endpoint: 'https://api-provider-b5s7.onrender.com/v1/chat/completions',
+    modelsEndpoint: 'https://api-provider-b5s7.onrender.com/v1/models',
     headers: {
       'Content-Type': 'application/json'
     },
-    models: new Set([
-      'deepseek-r1', 'gpt-4o', 'gpt-4o-latest', 'chatgpt-4o-latest',
-      'gemini-1.5-pro', 'gemini-1.5-pro-latest', 'gemini-flash-2.0',
-      'gemini-1.5-flash', 'claude-3-5-sonnet', 'claude-3-5-sonnet-20240620',
-      'anthropic/claude-3.5-sonnet', 'mistral-large', 'deepseek-v3',
-      'llama-3.1-405b', 'Meta-Llama-3.1-405B-Instruct-Turbo',
-      'Meta-Llama-3.3-70B-Instruct-Turbo', 'grok-2', 'qwen-plus-latest',
-      'qwen-turbo-latest', 'dbrx-instruct', 'claude', 'qwen-2.5-32b',
-      'qwen-2.5-coder-32b', 'qwen-qwq-32b', 'gemma2-9b-it',
-      'deepseek-r1-distill-llama-70b', 'o3-mini', 'Claude-sonnet-3.7'
-    ]),
+    models: new Set(), // Will be populated dynamically
     timeout: 30000,
     prefix: 'samu/'
   },
@@ -42,6 +33,30 @@ const apiConfig = {
     prefix: 'type/'
   }
 };
+
+// Function to fetch and update models from samura API
+async function updateSamuraModels() {
+  try {
+    const response = await axios.get(apiConfig.samura.modelsEndpoint, {
+      timeout: apiConfig.samura.timeout
+    });
+    
+    if (response.data && Array.isArray(response.data.data)) {
+      apiConfig.samura.models = new Set(response.data.data.map(model => model.id));
+      console.log('Successfully updated samura models:', [...apiConfig.samura.models]);
+    } else {
+      console.error('Unexpected response format from samura models endpoint');
+    }
+  } catch (error) {
+    console.error('Failed to fetch samura models:', error.message);
+    // You might want to implement retry logic here
+  }
+}
+
+// Initial models fetch
+updateSamuraModels();
+// Update models periodically (every 5 minutes)
+setInterval(updateSamuraModels, 5 * 60 * 1000);
 
 const getApiTarget = (model) => {
   if (!model) return null;
@@ -70,7 +85,10 @@ const getApiTarget = (model) => {
 
 // Health check endpoint
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'healthy' });
+  res.status(200).json({ 
+    status: 'healthy',
+    models_loaded: apiConfig.samura.models.size > 0
+  });
 });
 
 app.post('/v1/chat/completions', async (req, res) => {
