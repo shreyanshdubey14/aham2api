@@ -47,7 +47,7 @@ const apiConfig = {
 // Hardcoded models that we want to expose through our /v1/models endpoint
 const exposedModels = {
   'samura': new Set([
-    'deepseek-r1',
+    'samu/deepseek-r1',
     'gpt-4o',
     'gpt-4o-latest',
     'chatgpt-4o-latest',
