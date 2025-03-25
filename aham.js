@@ -311,5 +311,3 @@ app.listen(PORT, () => {
 
 
 
-you can tell me if i have to make changes to this api script 
-aur you can give the correct python code  for chatbot 
