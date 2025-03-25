@@ -13,7 +13,7 @@ const apiConfig = {
     headers: {
       'Content-Type': 'application/json'
     },
-    models: new Set(),
+    models: new Set(), // This will be populated by fetching
     timeout: 30000,
     prefix: 'samu/'
   },
@@ -38,13 +38,56 @@ const apiConfig = {
       'Content-Type': 'application/json',
       'Authorization': 'Bearer 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'
     },
-    models: new Set(),
+    models: new Set(), // This will be populated by fetching
     timeout: 30000,
     prefix: 'groq/'
   }
 };
 
-// Fetch and update samura models
+// Hardcoded models that we want to expose through our /v1/models endpoint
+const exposedModels = {
+  'samura': new Set([
+    'deepseek-r1',
+    'gpt-4o',
+    'gpt-4o-latest',
+    'chatgpt-4o-latest',
+    'gemini-1.5-pro',
+    'gemini-1.5-pro-latest',
+    'gemini-flash-2.0',
+    'gemini-1.5-flash',
+    'claude-3-5-sonnet',
+    'claude-3-5-sonnet-20240620',
+    'anthropic/claude-3.5-sonnet',
+    'mistral-large',
+    'deepseek-v3',
+    'llama-3.1-405b',
+    'Meta-Llama-3.1-405B-Instruct-Turbo',
+    'Meta-Llama-3.3-70B-Instruct-Turbo',
+    'grok-2',
+    'qwen-plus-latest',
+    'qwen-turbo-latest',
+    'dbrx-instruct',
+    'claude',
+    'qwen-2.5-32b',
+    'qwen-2.5-coder-32b',
+    'qwen-qwq-32b',
+    'gemma2-9b-it',
+    'deepseek-r1-distill-llama-70b',
+    'o3-mini',
+    'Claude-sonnet-3.7'
+  ]),
+  'groq': new Set([
+    'qwen-2.5-32b',
+    'qwen-qwq-32b'
+  ]),
+  'typegpt': new Set([
+    'gpt-4o-mini-2024-07-18',
+    'deepseek-r1',
+    'deepseek-v3'
+  ])
+};
+
+// Fetch and update samura models (for internal use)
 async function updateSamuraModels() {
   try {
     const response = await axios.get(apiConfig.samura.modelsEndpoint, {
@@ -53,14 +96,14 @@ async function updateSamuraModels() {
     
     if (response.data && Array.isArray(response.data.data)) {
       apiConfig.samura.models = new Set(response.data.data.map(model => model.id));
-      console.log('Updated samura models:', [...apiConfig.samura.models]);
+      console.log('Updated internal samura models:', [...apiConfig.samura.models]);
     }
   } catch (error) {
     console.error('Failed to fetch samura models:', error.message);
   }
 }
 
-// Fetch and update groq models
+// Fetch and update groq models (for internal use)
 async function updateGroqModels() {
   try {
     const response = await axios.get(apiConfig.groq.modelsEndpoint, {
@@ -70,7 +113,7 @@ async function updateGroqModels() {
     
     if (response.data && Array.isArray(response.data.data)) {
       apiConfig.groq.models = new Set(response.data.data.map(model => model.id));
-      console.log('Updated groq models:', [...apiConfig.groq.models]);
+      console.log('Updated internal groq models:', [...apiConfig.groq.models]);
     }
   } catch (error) {
     console.error('Failed to fetch groq models:', error.message);
@@ -125,36 +168,36 @@ app.get('/health', (req, res) => {
   });
 });
 
-// Models listing endpoint
+// Models listing endpoint - shows only our curated models
 app.get('/v1/models', (req, res) => {
   const allModels = [
-    ...[...apiConfig.samura.models].map(id => ({
+    ...[...exposedModels.samura].map(id => ({
       id: `samu/${id}`,
       object: 'model',
       provider: 'samura'
     })),
-    ...[...apiConfig.typegpt.models].map(id => ({
+    ...[...exposedModels.typegpt].map(id => ({
       id: `type/${id}`,
       object: 'model',
       provider: 'typegpt'
     })),
-    ...[...apiConfig.groq.models].map(id => ({
+    ...[...exposedModels.groq].map(id => ({
       id: `groq/${id}`,
       object: 'model',
       provider: 'groq'
     })),
     // Also include non-prefixed versions
-    ...[...apiConfig.samura.models].map(id => ({
+    ...[...exposedModels.samura].map(id => ({
       id,
       object: 'model',
       provider: 'samura'
     })),
-    ...[...apiConfig.typegpt.models].map(id => ({
+    ...[...exposedModels.typegpt].map(id => ({
       id,
       object: 'model',
       provider: 'typegpt'
     })),
-    ...[...apiConfig.groq.models].map(id => ({
+    ...[...exposedModels.groq].map(id => ({
       id,
       object: 'model',
       provider: 'groq'
@@ -181,11 +224,12 @@ app.post('/v1/chat/completions', async (req, res) => {
       return res.status(400).json({ 
         error: 'Invalid model specified',
         available_models: {
-          samura: [...apiConfig.samura.models].map(m => `samu/${m}`),
-          typegpt: [...apiConfig.typegpt.models].map(m => `type/${m}`),
-          groq: [...apiConfig.groq.models].map(m => `groq/${m}`),
-          ...Object.entries(apiConfig).reduce((acc, [key, config]) => {
-            acc[key] = [...config.models];
+          samura: [...exposedModels.samura].map(m => `samu/${m}`),
+          typegpt: [...exposedModels.typegpt].map(m => `type/${m}`),
+          groq: [...exposedModels.groq].map(m => `groq/${m}`),
+          // Also show non-prefixed versions
+          ...Object.entries(exposedModels).reduce((acc, [key, models]) => {
+            acc[key] = [...models];
             return acc;
           }, {})
         }
