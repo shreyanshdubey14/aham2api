@@ -15,7 +15,7 @@ const apiConfig = {
     },
     models: new Set(),
     timeout: 30000,
-    prefix: 'samu/'
+    prefix: 'samura-'
   },
   'typegpt': {
     endpoint: 'https://api.typegpt.net/v1/chat/completions',
@@ -29,7 +29,7 @@ const apiConfig = {
       'deepseek-v3'
     ]),
     timeout: 30000,
-    prefix: 'type/'
+    prefix: 'typegpt-'
   },
   'groq': {
     endpoint: 'https://api.groq.com/openai/v1/chat/completions',
@@ -40,14 +40,14 @@ const apiConfig = {
     },
     models: new Set(),
     timeout: 30000,
-    prefix: 'groq/'
+    prefix: 'groq-'
   }
 };
 
-// Hardcoded models that we want to expose through our /v1/models endpoint
+// Hardcoded exposed models with consistent naming
 const exposedModels = {
-  'samura': new Set([
-    'samu/deepseek-r1',
+  'samura': [
+    'deepseek-r1',
     'gpt-4o',
     'gpt-4o-latest',
     'chatgpt-4o-latest',
@@ -75,202 +75,234 @@ const exposedModels = {
     'deepseek-r1-distill-llama-70b',
     'o3-mini',
     'Claude-sonnet-3.7'
-  ]),
-  'groq': new Set([
+  ],
+  'groq': [
     'qwen-2.5-32b',
-    'qwen-qwq-32b'
-  ]),
-  'typegpt': new Set([
+    'qwen-qwq-32b',
+    'llama3-70b-8192',
+    'llama3-8b-8192',
+    'mixtral-8x7b-32768'
+  ],
+  'typegpt': [
     'gpt-4o-mini-2024-07-18',
     'deepseek-r1',
     'deepseek-v3'
-  ])
+  ]
 };
 
-// Fetch and update samura models (for internal use)
-async function updateSamuraModels() {
+// Initialize provider models
+async function initializeModels() {
   try {
-    const response = await axios.get(apiConfig.samura.modelsEndpoint, {
+    // Initialize Samura models
+    const samuraRes = await axios.get(apiConfig.samura.modelsEndpoint, {
       timeout: apiConfig.samura.timeout
     });
-    
-    if (response.data && Array.isArray(response.data.data)) {
-      apiConfig.samura.models = new Set(response.data.data.map(model => model.id));
-      console.log('Updated internal samura models:', [...apiConfig.samura.models]);
+    if (samuraRes.data?.data) {
+      apiConfig.samura.models = new Set(samuraRes.data.data.map(m => m.id));
     }
-  } catch (error) {
-    console.error('Failed to fetch samura models:', error.message);
-  }
-}
 
-// Fetch and update groq models (for internal use)
-async function updateGroqModels() {
-  try {
-    const response = await axios.get(apiConfig.groq.modelsEndpoint, {
+    // Initialize Groq models
+    const groqRes = await axios.get(apiConfig.groq.modelsEndpoint, {
       headers: apiConfig.groq.headers,
       timeout: apiConfig.groq.timeout
     });
-    
-    if (response.data && Array.isArray(response.data.data)) {
-      apiConfig.groq.models = new Set(response.data.data.map(model => model.id));
-      console.log('Updated internal groq models:', [...apiConfig.groq.models]);
+    if (groqRes.data?.data) {
+      apiConfig.groq.models = new Set(groqRes.data.data.map(m => m.id));
     }
   } catch (error) {
-    console.error('Failed to fetch groq models:', error.message);
+    console.error('Error initializing models:', error.message);
   }
 }
 
-// Initial fetch
-updateSamuraModels();
-updateGroqModels();
-// Refresh every 5 minutes
-setInterval(updateSamuraModels, 5 * 60 * 1000);
-setInterval(updateGroqModels, 5 * 60 * 1000);
+// Initialize and refresh models every 5 minutes
+initializeModels();
+setInterval(initializeModels, 5 * 60 * 1000);
 
-// Helper function to get API target
-const getApiTarget = (model) => {
-  if (!model) return null;
-  
-  if (model.startsWith('samu/')) {
-    const actualModel = model.replace('samu/', '');
-    if (apiConfig.samura.models.has(actualModel)) {
-      return { target: 'samura', model: actualModel };
-    }
-  }
-  
-  if (model.startsWith('type/')) {
-    const actualModel = model.replace('type/', '');
-    if (apiConfig.typegpt.models.has(actualModel)) {
-      return { target: 'typegpt', model: actualModel };
-    }
-  }
-  
-  if (model.startsWith('groq/')) {
-    const actualModel = model.replace('groq/', '');
-    if (apiConfig.groq.models.has(actualModel)) {
-      return { target: 'groq', model: actualModel };
-    }
-  }
-  
-  if (apiConfig.samura.models.has(model)) return { target: 'samura', model };
-  if (apiConfig.typegpt.models.has(model)) return { target: 'typegpt', model };
-  if (apiConfig.groq.models.has(model)) return { target: 'groq', model };
-  
-  return null;
-};
-
-// Health check endpoint
-app.get('/health', (req, res) => {
-  res.status(200).json({ 
-    status: 'healthy',
-    samura_models_loaded: apiConfig.samura.models.size > 0,
-    groq_models_loaded: apiConfig.groq.models.size > 0
-  });
-});
-
-// Models listing endpoint - shows only non-prefixed models
+// OpenAI-compatible models endpoint
 app.get('/v1/models', (req, res) => {
-  const allModels = [
-    // Only include non-prefixed versions
-    ...[...exposedModels.samura].map(id => ({
-      id,
-      object: 'model',
-      provider: 'samura'
-    })),
-    ...[...exposedModels.typegpt].map(id => ({
-      id,
-      object: 'model',
-      provider: 'typegpt'
-    })),
-    ...[...exposedModels.groq].map(id => ({
-      id,
-      object: 'model',
-      provider: 'groq'
-    }))
-  ];
+  const models = [];
+  
+  // Generate model list with provider prefixes
+  for (const [provider, modelIds] of Object.entries(exposedModels)) {
+    for (const modelId of modelIds) {
+      models.push({
+        id: `${apiConfig[provider].prefix}${modelId}`,
+        object: 'model',
+        created: Math.floor(Date.now() / 1000),
+        owned_by: provider,
+        root: `${apiConfig[provider].prefix}${modelId}`,
+        parent: null,
+        permission: [
+          {
+            id: `modelperm-${Math.random().toString(36).slice(2)}`,
+            object: 'model_permission',
+            created: Math.floor(Date.now() / 1000),
+            allow_create_engine: false,
+            allow_sampling: true,
+            allow_logprobs: true,
+            allow_search_indices: false,
+            allow_view: true,
+            allow_fine_tuning: false,
+            organization: '*',
+            group: null,
+            is_blocking: false
+          }
+        ]
+      });
+    }
+  }
 
   res.json({
     object: 'list',
-    data: allModels
+    data: models
   });
 });
 
-// Chat completions endpoint
+// Enhanced model routing
+function getApiTarget(modelId) {
+  if (!modelId) return null;
+
+  // Check for provider prefixes first
+  for (const [provider, config] of Object.entries(apiConfig)) {
+    if (modelId.startsWith(config.prefix)) {
+      const baseModel = modelId.slice(config.prefix.length);
+      if (apiConfig[provider].models.has(baseModel) || exposedModels[provider].includes(baseModel)) {
+        return { 
+          provider,
+          baseModel,
+          endpoint: config.endpoint,
+          headers: config.headers,
+          timeout: config.timeout
+        };
+      }
+    }
+  }
+
+  // If no prefix, check if model exists in exactly one provider
+  const matchingProviders = Object.entries(exposedModels)
+    .filter(([_, models]) => models.includes(modelId))
+    .map(([provider]) => provider);
+
+  if (matchingProviders.length === 1) {
+    const provider = matchingProviders[0];
+    return {
+      provider,
+      baseModel: modelId,
+      endpoint: apiConfig[provider].endpoint,
+      headers: apiConfig[provider].headers,
+      timeout: apiConfig[provider].timeout
+    };
+  }
+
+  return null;
+}
+
+// OpenAI-compatible chat completions endpoint
 app.post('/v1/chat/completions', async (req, res) => {
   try {
-    if (!req.body || typeof req.body !== 'object') {
-      return res.status(400).json({ error: 'Invalid request body' });
-    }
-
-    const { model } = req.body;
-    const targetInfo = getApiTarget(model);
-
-    if (!targetInfo) {
-      return res.status(400).json({ 
-        error: 'Invalid model specified',
-        available_models: {
-          samura: [...exposedModels.samura],
-          typegpt: [...exposedModels.typegpt],
-          groq: [...exposedModels.groq]
+    const { model, messages, temperature, max_tokens, stream } = req.body;
+    
+    // Validate request
+    if (!model || !messages) {
+      return res.status(400).json({
+        error: {
+          message: "'model' and 'messages' are required fields",
+          type: 'invalid_request_error',
+          param: null,
+          code: null
         }
       });
     }
 
-    const { target, model: actualModel } = targetInfo;
-    const config = apiConfig[target];
-    
+    // Get target API configuration
+    const target = getApiTarget(model);
+    if (!target) {
+      return res.status(400).json({
+        error: {
+          message: `The model '${model}' does not exist`,
+          type: 'invalid_request_error',
+          param: 'model',
+          code: 'model_not_found'
+        }
+      });
+    }
+
+    // Prepare request data
     const requestData = {
-      ...req.body,
-      model: actualModel
+      model: target.baseModel,
+      messages,
+      temperature: temperature || 0.7,
+      max_tokens: max_tokens || 1000,
+      stream: stream || false
     };
 
+    // Make request to target API
     const response = await axios({
       method: 'post',
-      url: config.endpoint,
-      headers: config.headers,
+      url: target.endpoint,
+      headers: target.headers,
       data: requestData,
-      timeout: config.timeout
+      timeout: target.timeout,
+      responseType: stream ? 'stream' : 'json'
     });
 
+    // Handle streaming response
+    if (stream) {
+      res.setHeader('Content-Type', 'text/event-stream');
+      response.data.pipe(res);
+      return;
+    }
+
+    // Standardize response format
+    const result = response.data;
     const standardizedResponse = {
-      id: response.data.id || `chatcmpl-${Date.now()}`,
+      id: result.id || `chatcmpl-${Math.random().toString(36).slice(2)}`,
       object: "chat.completion",
       created: Math.floor(Date.now() / 1000),
-      model: response.data.model || actualModel,
-      choices: response.data.choices?.map(choice => ({
-        index: 0,
+      model: `${target.provider}-${result.model || target.baseModel}`,
+      choices: result.choices?.map(choice => ({
+        index: choice.index || 0,
         message: {
-          role: "assistant",
+          role: choice.message?.role || "assistant",
           content: choice.message?.content || ""
         },
-        finish_reason: choice.finish_reason || "stop",
-        delta: {
-          content: "",
-          role: ""
-        }
+        finish_reason: choice.finish_reason || "stop"
       })) || [],
-      usage: response.data.usage || {
+      usage: result.usage || {
         prompt_tokens: 0,
         completion_tokens: 0,
         total_tokens: 0
       },
-      suggestions: null,
-      system_fingerprint: null
+      system_fingerprint: result.system_fingerprint || null
     };
 
     res.json(standardizedResponse);
 
   } catch (error) {
-    console.error('Proxy error:', error);
+    console.error('Error:', error.message);
     const statusCode = error.response?.status || 500;
-    const errorData = {
-      error: error.message,
-      ...(error.response?.data && { details: error.response.data })
+    const errorData = error.response?.data || {
+      error: {
+        message: error.message,
+        type: 'api_error',
+        code: null
+      }
     };
+    
     res.status(statusCode).json(errorData);
   }
 });
 
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.status(200).json({
+    status: 'healthy',
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Start server
 app.listen(PORT, () => {
-  console.log(`Proxy server running on port ${PORT}`);
+  console.log(`OpenAI-compatible API running on port ${PORT}`);
 });
