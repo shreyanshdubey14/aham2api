@@ -44,21 +44,49 @@ const apiConfig = {
   }
 };
 
-// Hardcoded exposed models
+// Hardcoded exposed models with consistent naming
 const exposedModels = {
   'samura': [
     'deepseek-r1',
     'gpt-4o',
+    'gpt-4o-latest',
+    'chatgpt-4o-latest',
+    'gemini-1.5-pro',
+    'gemini-1.5-pro-latest',
+    'gemini-flash-2.0',
+    'gemini-1.5-flash',
     'claude-3-5-sonnet',
-    'llama-3.1-405b'
+    'claude-3-5-sonnet-20240620',
+    'anthropic/claude-3.5-sonnet',
+    'mistral-large',
+    'deepseek-v3',
+    'llama-3.1-405b',
+    'Meta-Llama-3.1-405B-Instruct-Turbo',
+    'Meta-Llama-3.3-70B-Instruct-Turbo',
+    'grok-2',
+    'qwen-plus-latest',
+    'qwen-turbo-latest',
+    'dbrx-instruct',
+    'claude',
+    'qwen-2.5-32b',
+    'qwen-2.5-coder-32b',
+    'qwen-qwq-32b',
+    'gemma2-9b-it',
+    'deepseek-r1-distill-llama-70b',
+    'o3-mini',
+    'Claude-sonnet-3.7'
   ],
   'groq': [
+    'qwen-2.5-32b',
+    'qwen-qwq-32b',
     'llama3-70b-8192',
-    'llama3-8b-8192'
+    'llama3-8b-8192',
+    
   ],
   'typegpt': [
     'gpt-4o-mini-2024-07-18',
-    'deepseek-r1'
+    'deepseek-r1',
+    'deepseek-v3'
   ]
 };
 
@@ -90,43 +118,98 @@ async function initializeModels() {
 initializeModels();
 setInterval(initializeModels, 5 * 60 * 1000);
 
-// Enhanced message validation
-function validateMessages(messages) {
-  if (!Array.isArray(messages) return false;
+// OpenAI-compatible models endpoint
+app.get('/v1/models', (req, res) => {
+  const models = [];
   
-  for (const msg of messages) {
-    if (!msg.role || !msg.content) return false;
-    if (!['system', 'user', 'assistant'].includes(msg.role)) return false;
-    if (typeof msg.content !== 'string') return false;
+  // Generate model list with provider prefixes
+  for (const [provider, modelIds] of Object.entries(exposedModels)) {
+    for (const modelId of modelIds) {
+      models.push({
+        id: `${apiConfig[provider].prefix}${modelId}`,
+        object: 'model',
+        created: Math.floor(Date.now() / 1000),
+        owned_by: provider,
+        root: `${apiConfig[provider].prefix}${modelId}`,
+        parent: null,
+        permission: [
+          {
+            id: `modelperm-${Math.random().toString(36).slice(2)}`,
+            object: 'model_permission',
+            created: Math.floor(Date.now() / 1000),
+            allow_create_engine: false,
+            allow_sampling: true,
+            allow_logprobs: true,
+            allow_search_indices: false,
+            allow_view: true,
+            allow_fine_tuning: false,
+            organization: '*',
+            group: null,
+            is_blocking: false
+          }
+        ]
+      });
+    }
   }
-  
-  return true;
+
+  res.json({
+    object: 'list',
+    data: models
+  });
+});
+
+// Enhanced model routing
+function getApiTarget(modelId) {
+  if (!modelId) return null;
+
+  // Check for provider prefixes first
+  for (const [provider, config] of Object.entries(apiConfig)) {
+    if (modelId.startsWith(config.prefix)) {
+      const baseModel = modelId.slice(config.prefix.length);
+      if (apiConfig[provider].models.has(baseModel) || exposedModels[provider].includes(baseModel)) {
+        return { 
+          provider,
+          baseModel,
+          endpoint: config.endpoint,
+          headers: config.headers,
+          timeout: config.timeout
+        };
+      }
+    }
+  }
+
+  // If no prefix, check if model exists in exactly one provider
+  const matchingProviders = Object.entries(exposedModels)
+    .filter(([_, models]) => models.includes(modelId))
+    .map(([provider]) => provider);
+
+  if (matchingProviders.length === 1) {
+    const provider = matchingProviders[0];
+    return {
+      provider,
+      baseModel: modelId,
+      endpoint: apiConfig[provider].endpoint,
+      headers: apiConfig[provider].headers,
+      timeout: apiConfig[provider].timeout
+    };
+  }
+
+  return null;
 }
 
 // OpenAI-compatible chat completions endpoint
 app.post('/v1/chat/completions', async (req, res) => {
   try {
-    const { model, messages, temperature = 0.7, max_tokens = 2000, stream = false } = req.body;
+    const { model, messages, temperature, max_tokens, stream } = req.body;
     
-    // Enhanced validation
-    if (!model) {
+    // Validate request
+    if (!model || !messages) {
       return res.status(400).json({
         error: {
-          message: "'model' is required",
+          message: "'model' and 'messages' are required fields",
           type: 'invalid_request_error',
-          param: 'model',
-          code: 'model_required'
-        }
-      });
-    }
-
-    if (!validateMessages(messages)) {
-      return res.status(400).json({
-        error: {
-          message: "'messages' must be a non-empty array of message objects with 'role' and 'content'",
-          type: 'invalid_request_error',
-          param: 'messages',
-          code: 'invalid_messages_format'
+          param: null,
+          code: null
         }
       });
     }
@@ -144,13 +227,13 @@ app.post('/v1/chat/completions', async (req, res) => {
       });
     }
 
-    // Prepare request data with conversation history
+    // Prepare request data
     const requestData = {
       model: target.baseModel,
-      messages,  // Pass through the full message history
-      temperature: Math.min(Math.max(temperature, 0), 2),
-      max_tokens: Math.min(Math.max(max_tokens, 1), 4000),
-      stream
+      messages,
+      temperature: temperature || 0.7,
+      max_tokens: max_tokens || 1000,
+      stream: stream || false
     };
 
     // Make request to target API
@@ -170,42 +253,63 @@ app.post('/v1/chat/completions', async (req, res) => {
       return;
     }
 
-    // Return standardized response
-    res.json({
-      id: `chatcmpl-${Math.random().toString(36).slice(2)}`,
+    // Standardize response format
+    const result = response.data;
+    const standardizedResponse = {
+      id: result.id || `chatcmpl-${Math.random().toString(36).slice(2)}`,
       object: "chat.completion",
       created: Math.floor(Date.now() / 1000),
-      model: `${target.prefix}${target.baseModel}`,
-      choices: [{
-        index: 0,
+      model: `${target.provider}-${result.model || target.baseModel}`,
+      choices: result.choices?.map(choice => ({
+        index: choice.index || 0,
         message: {
-          role: "assistant",
-          content: response.data.choices?.[0]?.message?.content || ""
+          role: choice.message?.role || "assistant",
+          content: choice.message?.content || ""
         },
-        finish_reason: "stop"
-      }],
-      usage: {
+        finish_reason: choice.finish_reason || "stop"
+      })) || [],
+      usage: result.usage || {
         prompt_tokens: 0,
         completion_tokens: 0,
         total_tokens: 0
-      }
-    });
+      },
+      system_fingerprint: result.system_fingerprint || null
+    };
+
+    res.json(standardizedResponse);
 
   } catch (error) {
-    console.error('API Error:', error.message);
-    const status = error.response?.status || 500;
-    const data = error.response?.data || {
+    console.error('Error:', error.message);
+    const statusCode = error.response?.status || 500;
+    const errorData = error.response?.data || {
       error: {
         message: error.message,
         type: 'api_error',
         code: null
       }
     };
-    res.status(status).json(data);
+    
+    res.status(statusCode).json(errorData);
   }
+});
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.status(200).json({
+    status: 'healthy',
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString()
+  });
 });
 
 // Start server
 app.listen(PORT, () => {
-  console.log(`API server running on port ${PORT}`);
+  console.log(`OpenAI-compatible API running on port ${PORT}`);
 });
+
+
+
+
+
+you can tell me if i have to make changes to this api script 
+aur you can give the correct python code  for chatbot 
