@@ -2,6 +2,7 @@ const express = require('express');
 const axios = require('axios');
 const app = express();
 const PORT = process.env.PORT || 3000;
+
 app.use(express.json());
 
 // API configurations
@@ -9,7 +10,9 @@ const apiConfig = {
   'samura': {
     endpoint: 'https://api-provider-b5s7.onrender.com/v1/chat/completions',
     modelsEndpoint: 'https://api-provider-b5s7.onrender.com/v1/models',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json'
+    },
     models: new Set(),
     timeout: 30000,
     prefix: 'samu/'
@@ -20,7 +23,11 @@ const apiConfig = {
       'Content-Type': 'application/json',
       'Authorization': 'Bearer sk-5Sichm5uRiWUz5KNav8x8AUEpf11UqqzDsph5palyybb0B3i'
     },
-    models: new Set(['gpt-4o-mini-2024-07-18', 'deepseek-r1', 'deepseek-v3']),
+    models: new Set([
+      'gpt-4o-mini-2024-07-18',
+      'deepseek-r1',
+      'deepseek-v3'
+    ]),
     timeout: 30000,
     prefix: 'type/'
   },
@@ -37,107 +44,169 @@ const apiConfig = {
   }
 };
 
-// Hardcoded exposed models
+// Hardcoded models that we want to expose through our /v1/models endpoint
 const exposedModels = {
   'samura': new Set([
-    'deepseek-r1', 'gpt-4o', 'gpt-4o-latest', 'chatgpt-4o-latest',
-    'gemini-1.5-pro', 'gemini-1.5-pro-latest', 'gemini-flash-2.0',
-    'gemini-1.5-flash', 'claude-3-5-sonnet', 'claude-3-5-sonnet-20240620',
-    'anthropic/claude-3.5-sonnet', 'mistral-large', 'deepseek-v3',
-    'llama-3.1-405b', 'Meta-Llama-3.1-405B-Instruct-Turbo',
-    'Meta-Llama-3.3-70B-Instruct-Turbo', 'grok-2', 'qwen-plus-latest',
-    'qwen-turbo-latest', 'dbrx-instruct', 'claude', 'qwen-2.5-32b',
-    'qwen-2.5-coder-32b', 'qwen-qwq-32b', 'gemma2-9b-it',
-    'deepseek-r1-distill-llama-70b', 'o3-mini', 'Claude-sonnet-3.7'
+    'deepseek-r1',
+    'gpt-4o',
+    'gpt-4o-latest',
+    'chatgpt-4o-latest',
+    'gemini-1.5-pro',
+    'gemini-1.5-pro-latest',
+    'gemini-flash-2.0',
+    'gemini-1.5-flash',
+    'claude-3-5-sonnet',
+    'claude-3-5-sonnet-20240620',
+    'anthropic/claude-3.5-sonnet',
+    'mistral-large',
+    'deepseek-v3',
+    'llama-3.1-405b',
+    'Meta-Llama-3.1-405B-Instruct-Turbo',
+    'Meta-Llama-3.3-70B-Instruct-Turbo',
+    'grok-2',
+    'qwen-plus-latest',
+    'qwen-turbo-latest',
+    'dbrx-instruct',
+    'claude',
+    'qwen-2.5-32b',
+    'qwen-2.5-coder-32b',
+    'qwen-qwq-32b',
+    'gemma2-9b-it',
+    'deepseek-r1-distill-llama-70b',
+    'o3-mini',
+    'Claude-sonnet-3.7'
   ]),
-  'groq': new Set(['qwen-2.5-32b', 'qwen-qwq-32b']),
-  'typegpt': new Set(['gpt-4o-mini-2024-07-18', 'deepseek-r1', 'deepseek-v3'])
+  'groq': new Set([
+    'qwen-2.5-32b',
+    'qwen-qwq-32b'
+  ]),
+  'typegpt': new Set([
+    'gpt-4o-mini-2024-07-18',
+    'deepseek-r1',
+    'deepseek-v3'
+  ])
 };
 
-// Model management functions
+// Fetch and update samura models (for internal use)
 async function updateSamuraModels() {
   try {
     const response = await axios.get(apiConfig.samura.modelsEndpoint, {
       timeout: apiConfig.samura.timeout
     });
-    if (response.data?.data) {
-      apiConfig.samura.models = new Set(response.data.data.map(m => m.id));
+    
+    if (response.data && Array.isArray(response.data.data)) {
+      apiConfig.samura.models = new Set(response.data.data.map(model => model.id));
+      console.log('Updated internal samura models:', [...apiConfig.samura.models]);
     }
   } catch (error) {
     console.error('Failed to fetch samura models:', error.message);
   }
 }
 
+// Fetch and update groq models (for internal use)
 async function updateGroqModels() {
   try {
     const response = await axios.get(apiConfig.groq.modelsEndpoint, {
       headers: apiConfig.groq.headers,
       timeout: apiConfig.groq.timeout
     });
-    if (response.data?.data) {
-      apiConfig.groq.models = new Set(response.data.data.map(m => m.id));
+    
+    if (response.data && Array.isArray(response.data.data)) {
+      apiConfig.groq.models = new Set(response.data.data.map(model => model.id));
+      console.log('Updated internal groq models:', [...apiConfig.groq.models]);
     }
   } catch (error) {
     console.error('Failed to fetch groq models:', error.message);
   }
 }
 
-// Initial model loading
+// Initial fetch
 updateSamuraModels();
 updateGroqModels();
+// Refresh every 5 minutes
 setInterval(updateSamuraModels, 5 * 60 * 1000);
 setInterval(updateGroqModels, 5 * 60 * 1000);
 
-// Model resolution with case insensitivity
+// Helper function to get API target
 const getApiTarget = (model) => {
   if (!model) return null;
-  const lowerModel = model.toLowerCase();
-
-  // Check prefixed models first
-  const prefixMap = {
-    'samu/': 'samura',
-    'type/': 'typegpt',
-    'groq/': 'groq'
-  };
-
-  for (const [prefix, target] of Object.entries(prefixMap)) {
-    if (lowerModel.startsWith(prefix)) {
-      const actualModel = lowerModel.replace(prefix, '');
-      if (apiConfig[target].models.has(actualModel)) {
-        return { target, model: actualModel };
-      }
+  
+  if (model.startsWith('samu/')) {
+    const actualModel = model.replace('samu/', '');
+    if (apiConfig.samura.models.has(actualModel)) {
+      return { target: 'samura', model: actualModel };
     }
   }
-
-  // Check non-prefixed models
-  for (const [provider, models] of Object.entries(exposedModels)) {
-    if (models.has(lowerModel)) {
-      return { target: provider, model: lowerModel };
+  
+  if (model.startsWith('type/')) {
+    const actualModel = model.replace('type/', '');
+    if (apiConfig.typegpt.models.has(actualModel)) {
+      return { target: 'typegpt', model: actualModel };
     }
   }
-
+  
+  if (model.startsWith('groq/')) {
+    const actualModel = model.replace('groq/', '');
+    if (apiConfig.groq.models.has(actualModel)) {
+      return { target: 'groq', model: actualModel };
+    }
+  }
+  
+  if (apiConfig.samura.models.has(model)) return { target: 'samura', model };
+  if (apiConfig.typegpt.models.has(model)) return { target: 'typegpt', model };
+  if (apiConfig.groq.models.has(model)) return { target: 'groq', model };
+  
   return null;
 };
 
-// OpenAI-compatible models endpoint
-app.get('/v1/models', (req, res) => {
-  const models = Array.from(new Set([
-    ...exposedModels.samura,
-    ...exposedModels.typegpt,
-    ...exposedModels.groq
-  ])).map(id => ({ id, object: 'model' }));
-
-  res.json({ object: 'list', data: models });
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.status(200).json({ 
+    status: 'healthy',
+    samura_models_loaded: apiConfig.samura.models.size > 0,
+    groq_models_loaded: apiConfig.groq.models.size > 0
+  });
 });
 
-// Enhanced chat completions endpoint
+// Models listing endpoint - shows only non-prefixed models
+app.get('/v1/models', (req, res) => {
+  const allModels = [
+    // Only include non-prefixed versions
+    ...[...exposedModels.samura].map(id => ({
+      id,
+      object: 'model',
+      provider: 'samura'
+    })),
+    ...[...exposedModels.typegpt].map(id => ({
+      id,
+      object: 'model',
+      provider: 'typegpt'
+    })),
+    ...[...exposedModels.groq].map(id => ({
+      id,
+      object: 'model',
+      provider: 'groq'
+    }))
+  ];
+
+  res.json({
+    object: 'list',
+    data: allModels
+  });
+});
+
+// Chat completions endpoint
 app.post('/v1/chat/completions', async (req, res) => {
   try {
-    const { model, messages, temperature } = req.body;
+    if (!req.body || typeof req.body !== 'object') {
+      return res.status(400).json({ error: 'Invalid request body' });
+    }
+
+    const { model } = req.body;
     const targetInfo = getApiTarget(model);
 
     if (!targetInfo) {
-      return res.status(400).json({
+      return res.status(400).json({ 
         error: 'Invalid model specified',
         available_models: {
           samura: [...exposedModels.samura],
@@ -150,51 +219,49 @@ app.post('/v1/chat/completions', async (req, res) => {
     const { target, model: actualModel } = targetInfo;
     const config = apiConfig[target];
     
-    // Prepare request payload
     const requestData = {
-      model: actualModel,
-      messages,
-      temperature: temperature || 0.7,
-      stream: false
+      ...req.body,
+      model: actualModel
     };
 
-    // Make upstream API request
-    const response = await axios.post(config.endpoint, requestData, {
+    const response = await axios({
+      method: 'post',
+      url: config.endpoint,
       headers: config.headers,
+      data: requestData,
       timeout: config.timeout
     });
 
-    // Process DeepSeek-R1 specific response
-    const choice = response.data.choices?.[0];
-    if (!choice) return res.status(500).json({ error: 'No choices returned' });
-
-    // Extract reasoning and final answer
-    const content = choice.message?.content || '';
-    const [reasoning, answer] = content.split('</think>\n').map(s => s.trim());
-
-    // Standard OpenAI format
     const standardizedResponse = {
       id: response.data.id || `chatcmpl-${Date.now()}`,
       object: "chat.completion",
       created: Math.floor(Date.now() / 1000),
-      model: actualModel,
-      choices: [{
+      model: response.data.model || actualModel,
+      choices: response.data.choices?.map(choice => ({
         index: 0,
         message: {
-          role: choice.message?.role || "assistant",
-          content: answer || ""
+          role: "assistant",
+          content: choice.message?.content || ""
         },
-        finish_reason: choice.finish_reason || "stop"
-      }],
+        finish_reason: choice.finish_reason || "stop",
+        delta: {
+          content: "",
+          role: ""
+        }
+      })) || [],
       usage: response.data.usage || {
         prompt_tokens: 0,
         completion_tokens: 0,
         total_tokens: 0
-      }
+      },
+      suggestions: null,
+      system_fingerprint: null
     };
 
     res.json(standardizedResponse);
+
   } catch (error) {
+    console.error('Proxy error:', error);
     const statusCode = error.response?.status || 500;
     const errorData = {
       error: error.message,
@@ -205,5 +272,5 @@ app.post('/v1/chat/completions', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`Proxy server running on port ${PORT}`);
 });
