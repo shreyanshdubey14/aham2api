@@ -2,7 +2,6 @@ const express = require('express');
 const axios = require('axios');
 const app = express();
 const PORT = process.env.PORT || 3000;
-
 app.use(express.json());
 
 // API configurations
@@ -41,6 +40,18 @@ const apiConfig = {
     models: new Set(),
     timeout: 30000,
     prefix: 'groq/'
+  },
+  'openrouter': {
+    endpoint: 'https://openrouter.ai/api/v1/chat/completions',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer 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'
+    },
+    models: new Set([
+      'deepseek/deepseek-chat-v3-0324:free'
+    ]),
+    timeout: 30000,
+    prefix: 'openrouter/'
   }
 };
 
@@ -84,6 +95,9 @@ const exposedModels = {
     'gpt-4o-mini-2024-07-18',
     'deepseek-r1',
     'deepseek-v3'
+  ]),
+  'openrouter': new Set([
+    'deepseek/deepseek-chat-v3-0324:free'
   ])
 };
 
@@ -93,7 +107,6 @@ async function updateSamuraModels() {
     const response = await axios.get(apiConfig.samura.modelsEndpoint, {
       timeout: apiConfig.samura.timeout
     });
-    
     if (response.data && Array.isArray(response.data.data)) {
       apiConfig.samura.models = new Set(response.data.data.map(model => model.id));
       console.log('Updated internal samura models:', [...apiConfig.samura.models]);
@@ -110,7 +123,6 @@ async function updateGroqModels() {
       headers: apiConfig.groq.headers,
       timeout: apiConfig.groq.timeout
     });
-    
     if (response.data && Array.isArray(response.data.data)) {
       apiConfig.groq.models = new Set(response.data.data.map(model => model.id));
       console.log('Updated internal groq models:', [...apiConfig.groq.models]);
@@ -123,6 +135,7 @@ async function updateGroqModels() {
 // Initial fetch
 updateSamuraModels();
 updateGroqModels();
+
 // Refresh every 5 minutes
 setInterval(updateSamuraModels, 5 * 60 * 1000);
 setInterval(updateGroqModels, 5 * 60 * 1000);
@@ -152,16 +165,24 @@ const getApiTarget = (model) => {
     }
   }
   
+  if (model.startsWith('openrouter/')) {
+    const actualModel = model.replace('openrouter/', '');
+    if (apiConfig.openrouter.models.has(actualModel)) {
+      return { target: 'openrouter', model: actualModel };
+    }
+  }
+  
   if (apiConfig.samura.models.has(model)) return { target: 'samura', model };
   if (apiConfig.typegpt.models.has(model)) return { target: 'typegpt', model };
   if (apiConfig.groq.models.has(model)) return { target: 'groq', model };
+  if (apiConfig.openrouter.models.has(model)) return { target: 'openrouter', model };
   
   return null;
 };
 
 // Health check endpoint
 app.get('/health', (req, res) => {
-  res.status(200).json({ 
+  res.status(200).json({
     status: 'healthy',
     samura_models_loaded: apiConfig.samura.models.size > 0,
     groq_models_loaded: apiConfig.groq.models.size > 0
@@ -186,12 +207,16 @@ app.get('/v1/models', (req, res) => {
       id,
       object: 'model',
       provider: 'groq'
+    })),
+    ...[...exposedModels.openrouter].map(id => ({
+      id,
+      object: 'model',
+      provider: 'openrouter'
     }))
   ];
-
   res.json({
     object: 'list',
-    data: allModels
+    allModels
   });
 });
 
@@ -201,21 +226,22 @@ app.post('/v1/chat/completions', async (req, res) => {
     if (!req.body || typeof req.body !== 'object') {
       return res.status(400).json({ error: 'Invalid request body' });
     }
-
+    
     const { model } = req.body;
     const targetInfo = getApiTarget(model);
-
+    
     if (!targetInfo) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         error: 'Invalid model specified',
         available_models: {
           samura: [...exposedModels.samura],
           typegpt: [...exposedModels.typegpt],
-          groq: [...exposedModels.groq]
+          groq: [...exposedModels.groq],
+          openrouter: [...exposedModels.openrouter]
         }
       });
     }
-
+    
     const { target, model: actualModel } = targetInfo;
     const config = apiConfig[target];
     
@@ -223,7 +249,7 @@ app.post('/v1/chat/completions', async (req, res) => {
       ...req.body,
       model: actualModel
     };
-
+    
     const response = await axios({
       method: 'post',
       url: config.endpoint,
@@ -231,16 +257,17 @@ app.post('/v1/chat/completions', async (req, res) => {
       data: requestData,
       timeout: config.timeout
     });
-
+    
+    // Standardize the response format
     const standardizedResponse = {
       id: response.data.id || `chatcmpl-${Date.now()}`,
       object: "chat.completion",
-      created: Math.floor(Date.now() / 1000),
+      created: response.data.created || Math.floor(Date.now() / 1000),
       model: response.data.model || actualModel,
-      choices: response.data.choices?.map(choice => ({
-        index: 0,
+      choices: (response.data.choices || []).map(choice => ({
+        index: choice.index || 0,
         message: {
-          role: "assistant",
+          role: choice.message?.role || "assistant",
           content: choice.message?.content || ""
         },
         finish_reason: choice.finish_reason || "stop",
@@ -248,7 +275,7 @@ app.post('/v1/chat/completions', async (req, res) => {
           content: "",
           role: ""
         }
-      })) || [],
+      })),
       usage: response.data.usage || {
         prompt_tokens: 0,
         completion_tokens: 0,
@@ -257,9 +284,8 @@ app.post('/v1/chat/completions', async (req, res) => {
       suggestions: null,
       system_fingerprint: null
     };
-
+    
     res.json(standardizedResponse);
-
   } catch (error) {
     console.error('Proxy error:', error);
     const statusCode = error.response?.status || 500;
