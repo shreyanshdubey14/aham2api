@@ -45,7 +45,9 @@ const apiConfig = {
     endpoint: 'https://openrouter.ai/api/v1/chat/completions',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': 'Bearer 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'
+      'Authorization': 'Bearer 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',
+      'HTTP-Referer': 'https://aham2api-3.onrender.com',
+      'X-Title': 'Aham API Proxy'
     },
     models: new Set([
       'deepseek/deepseek-chat-v3-0324:free'
@@ -55,172 +57,9 @@ const apiConfig = {
   }
 };
 
-// Hardcoded models that we want to expose through our /v1/models endpoint
-const exposedModels = {
-  'samura': new Set([
-    'deepseek-r1',
-    'gpt-4o',
-    'gpt-4o-latest',
-    'chatgpt-4o-latest',
-    'gemini-1.5-pro',
-    'gemini-1.5-pro-latest',
-    'gemini-flash-2.0',
-    'gemini-1.5-flash',
-    'claude-3-5-sonnet',
-    'claude-3-5-sonnet-20240620',
-    'anthropic/claude-3.5-sonnet',
-    'mistral-large',
-    'deepseek-v3',
-    'llama-3.1-405b',
-    'Meta-Llama-3.1-405B-Instruct-Turbo',
-    'Meta-Llama-3.3-70B-Instruct-Turbo',
-    'grok-2',
-    'qwen-plus-latest',
-    'qwen-turbo-latest',
-    'dbrx-instruct',
-    'claude',
-    'qwen-2.5-32b',
-    'qwen-2.5-coder-32b',
-    'qwen-qwq-32b',
-    'gemma2-9b-it',
-    'deepseek-r1-distill-llama-70b',
-    'o3-mini',
-    'Claude-sonnet-3.7'
-  ]),
-  'groq': new Set([
-    'qwen-2.5-32b',
-    'qwen-qwq-32b'
-  ]),
-  'typegpt': new Set([
-    'gpt-4o-mini-2024-07-18',
-    'deepseek-r1',
-    'deepseek-v3'
-  ]),
-  'openrouter': new Set([
-    'deepseek/deepseek-chat-v3-0324:free'
-  ])
-};
+// [Rest of your existing configuration remains the same...]
 
-// Fetch and update samura models (for internal use)
-async function updateSamuraModels() {
-  try {
-    const response = await axios.get(apiConfig.samura.modelsEndpoint, {
-      timeout: apiConfig.samura.timeout
-    });
-    if (response.data && Array.isArray(response.data.data)) {
-      apiConfig.samura.models = new Set(response.data.data.map(model => model.id));
-      console.log('Updated internal samura models:', [...apiConfig.samura.models]);
-    }
-  } catch (error) {
-    console.error('Failed to fetch samura models:', error.message);
-  }
-}
-
-// Fetch and update groq models (for internal use)
-async function updateGroqModels() {
-  try {
-    const response = await axios.get(apiConfig.groq.modelsEndpoint, {
-      headers: apiConfig.groq.headers,
-      timeout: apiConfig.groq.timeout
-    });
-    if (response.data && Array.isArray(response.data.data)) {
-      apiConfig.groq.models = new Set(response.data.data.map(model => model.id));
-      console.log('Updated internal groq models:', [...apiConfig.groq.models]);
-    }
-  } catch (error) {
-    console.error('Failed to fetch groq models:', error.message);
-  }
-}
-
-// Initial fetch
-updateSamuraModels();
-updateGroqModels();
-
-// Refresh every 5 minutes
-setInterval(updateSamuraModels, 5 * 60 * 1000);
-setInterval(updateGroqModels, 5 * 60 * 1000);
-
-// Helper function to get API target
-const getApiTarget = (model) => {
-  if (!model) return null;
-  
-  if (model.startsWith('samu/')) {
-    const actualModel = model.replace('samu/', '');
-    if (apiConfig.samura.models.has(actualModel)) {
-      return { target: 'samura', model: actualModel };
-    }
-  }
-  
-  if (model.startsWith('type/')) {
-    const actualModel = model.replace('type/', '');
-    if (apiConfig.typegpt.models.has(actualModel)) {
-      return { target: 'typegpt', model: actualModel };
-    }
-  }
-  
-  if (model.startsWith('groq/')) {
-    const actualModel = model.replace('groq/', '');
-    if (apiConfig.groq.models.has(actualModel)) {
-      return { target: 'groq', model: actualModel };
-    }
-  }
-  
-  if (model.startsWith('openrouter/')) {
-    const actualModel = model.replace('openrouter/', '');
-    if (apiConfig.openrouter.models.has(actualModel)) {
-      return { target: 'openrouter', model: actualModel };
-    }
-  }
-  
-  if (apiConfig.samura.models.has(model)) return { target: 'samura', model };
-  if (apiConfig.typegpt.models.has(model)) return { target: 'typegpt', model };
-  if (apiConfig.groq.models.has(model)) return { target: 'groq', model };
-  if (apiConfig.openrouter.models.has(model)) return { target: 'openrouter', model };
-  
-  return null;
-};
-
-// Health check endpoint
-app.get('/health', (req, res) => {
-  res.status(200).json({
-    status: 'healthy',
-    samura_models_loaded: apiConfig.samura.models.size > 0,
-    groq_models_loaded: apiConfig.groq.models.size > 0
-  });
-});
-
-// Models listing endpoint - shows only non-prefixed models
-app.get('/v1/models', (req, res) => {
-  const allModels = [
-    // Only include non-prefixed versions
-    ...[...exposedModels.samura].map(id => ({
-      id,
-      object: 'model',
-      provider: 'samura'
-    })),
-    ...[...exposedModels.typegpt].map(id => ({
-      id,
-      object: 'model',
-      provider: 'typegpt'
-    })),
-    ...[...exposedModels.groq].map(id => ({
-      id,
-      object: 'model',
-      provider: 'groq'
-    })),
-    ...[...exposedModels.openrouter].map(id => ({
-      id,
-      object: 'model',
-      provider: 'openrouter'
-    }))
-  ];
-  res.json({
-    object: 'list',
-    allModels
-  });
-});
-
-// Chat completions endpoint
+// Enhanced chat completions endpoint with proper OpenRouter handling
 app.post('/v1/chat/completions', async (req, res) => {
   try {
     if (!req.body || typeof req.body !== 'object') {
@@ -245,20 +84,34 @@ app.post('/v1/chat/completions', async (req, res) => {
     const { target, model: actualModel } = targetInfo;
     const config = apiConfig[target];
     
+    // Prepare the request data
     const requestData = {
       ...req.body,
       model: actualModel
     };
     
+    // Special handling for OpenRouter
+    const headers = { ...config.headers };
+    if (target === 'openrouter') {
+      // Ensure required headers are present
+      if (!headers['HTTP-Referer']) {
+        headers['HTTP-Referer'] = 'https://aham2api-3.onrender.com';
+      }
+      if (!headers['X-Title']) {
+        headers['X-Title'] = 'Aham API Proxy';
+      }
+    }
+    
+    // Make the request to the target API
     const response = await axios({
       method: 'post',
       url: config.endpoint,
-      headers: config.headers,
-      data: requestData,
+      headers: headers,
+      requestData,
       timeout: config.timeout
     });
     
-    // Standardize the response format
+    // Standardize the response
     const standardizedResponse = {
       id: response.data.id || `chatcmpl-${Date.now()}`,
       object: "chat.completion",
@@ -287,15 +140,28 @@ app.post('/v1/chat/completions', async (req, res) => {
     
     res.json(standardizedResponse);
   } catch (error) {
-    console.error('Proxy error:', error);
+    console.error('Proxy error:', error.message);
+    console.error('Error details:', error.response?.data);
+    
     const statusCode = error.response?.status || 500;
     const errorData = {
       error: error.message,
       ...(error.response?.data && { details: error.response.data })
     };
+    
+    // Special handling for authentication errors
+    if (statusCode === 401) {
+      errorData.error = "Authentication failed with the API provider";
+      if (targetInfo?.target === 'openrouter') {
+        errorData.suggestion = "Please verify your OpenRouter API key and required headers";
+      }
+    }
+    
     res.status(statusCode).json(errorData);
   }
 });
+
+// [Rest of your existing code remains the same...]
 
 app.listen(PORT, () => {
   console.log(`Proxy server running on port ${PORT}`);
