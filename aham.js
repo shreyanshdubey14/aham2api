@@ -145,40 +145,34 @@ setInterval(updateGroqModels, 5 * 60 * 1000);
 // Helper function to get API target
 const getApiTarget = (model) => {
   if (!model) return null;
-  
   if (model.startsWith('samu/')) {
     const actualModel = model.replace('samu/', '');
     if (apiConfig.samura.models.has(actualModel)) {
       return { target: 'samura', model: actualModel };
     }
   }
-  
   if (model.startsWith('type/')) {
     const actualModel = model.replace('type/', '');
     if (apiConfig.typegpt.models.has(actualModel)) {
       return { target: 'typegpt', model: actualModel };
     }
   }
-  
   if (model.startsWith('groq/')) {
     const actualModel = model.replace('groq/', '');
     if (apiConfig.groq.models.has(actualModel)) {
       return { target: 'groq', model: actualModel };
     }
   }
-  
   if (model.startsWith('openrouter/')) {
     const actualModel = model.replace('openrouter/', '');
     if (apiConfig.openrouter.models.has(actualModel)) {
       return { target: 'openrouter', model: actualModel };
     }
   }
-  
   if (apiConfig.samura.models.has(model)) return { target: 'samura', model };
   if (apiConfig.typegpt.models.has(model)) return { target: 'typegpt', model };
   if (apiConfig.groq.models.has(model)) return { target: 'groq', model };
   if (apiConfig.openrouter.models.has(model)) return { target: 'openrouter', model };
-  
   return null;
 };
 
@@ -222,18 +216,18 @@ app.get('/v1/models', (req, res) => {
   });
 });
 
-// Chat completions endpoint
+// Chat completions endpoint with streaming support
 app.post('/v1/chat/completions', async (req, res) => {
   try {
     if (!req.body || typeof req.body !== 'object') {
       return res.status(400).json({ error: 'Invalid request body' });
     }
-    
-    const { model } = req.body;
+
+    const { model, stream } = req.body;
     if (!model) {
       return res.status(400).json({ error: 'Model parameter is required' });
     }
-    
+
     const targetInfo = getApiTarget(model);
     if (!targetInfo) {
       return res.status(400).json({
@@ -246,25 +240,60 @@ app.post('/v1/chat/completions', async (req, res) => {
         }
       });
     }
-    
+
     const { target, model: actualModel } = targetInfo;
     const config = apiConfig[target];
-    
+
     // Prepare the request
     const requestData = {
       ...req.body,
       model: actualModel
     };
-    
-    // Make sure to use the correct property name for axios (data, not requestData)
+
+    // Handle streaming response
+    if (stream) {
+      // Set headers for SSE (Server-Sent Events)
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      res.flushHeaders();
+
+      // Make the streaming request to the target API
+      const response = await axios({
+        method: 'post',
+        url: config.endpoint,
+        headers: config.headers,
+        data: requestData,
+        responseType: 'stream',
+        timeout: config.timeout
+      });
+
+      // Forward the stream from the target API to the client
+      response.data.on('data', (chunk) => {
+        res.write(chunk);
+      });
+
+      response.data.on('end', () => {
+        res.end();
+      });
+
+      response.data.on('error', (err) => {
+        console.error('Stream error:', err);
+        res.status(500).end();
+      });
+
+      return;
+    }
+
+    // Handle non-streaming response
     const response = await axios({
       method: 'post',
       url: config.endpoint,
       headers: config.headers,
-      data: requestData,  // Fixed: using 'data' instead of 'requestData'
+      data: requestData,
       timeout: config.timeout
     });
-    
+
     // Standardize the response
     const standardizedResponse = {
       id: response.data.id || `chatcmpl-${Date.now()}`,
@@ -291,20 +320,18 @@ app.post('/v1/chat/completions', async (req, res) => {
       suggestions: null,
       system_fingerprint: null
     };
-    
+
     res.json(standardizedResponse);
   } catch (error) {
     console.error('Proxy error:', error.message);
     if (error.response) {
       console.error('Error response:', error.response.data);
     }
-    
     const statusCode = error.response?.status || 500;
     const errorData = {
       error: error.message,
       ...(error.response?.data && { details: error.response.data })
     };
-    
     res.status(statusCode).json(errorData);
   }
 });
